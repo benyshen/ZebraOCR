@@ -1,0 +1,39 @@
+﻿# ===== ZebraOCR 仓库忽略规则 =====
+
+# OCR 模型权重（6.3GB，不上传，使用 HuggingFace 开源链接下载）
+# https://huggingface.co/baidu/Unlimited-OCR
+Unlimited-OCR/
+
+# .NET 构建产物
+**/bin/
+**/obj/
+ZebraOCR/publish/
+
+# Python 缓存
+**/__pycache__/
+
+# 开发调试临时文件（历史遗留）
+*.log
+check*.txt
+check_script*.ps1
+conv.ps1
+enc_test.txt
+inspect.ps1
+launcher.py
+reflect.ps1
+scan_test.ps1
+scanner_test.txt
+scanner_xml.txt
+snap.ps1
+test_cs.ps1
+title*.txt
+title_script.ps1
+uia.ps1
+uia_go.ps1
+ui_check.jpg
+ui_check.png
+
+# IDE / 系统文件
+.vs/
+*.user
+Thumbs.db

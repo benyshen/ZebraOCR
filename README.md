@@ -44,7 +44,15 @@ huggingface-cli download baidu/Unlimited-OCR --local-dir D:\AI\OCR-Scane\Unlimit
    dotnet build -c Debug
    .\ZebraOCR\ZebraOCR\bin\Debug\net8.0-windows\ZebraOCR.exe
    ```
-5. 下拉框选择 `[底座] CR8288` → 连接 → 点击「扫码并OCR识别」→ 扣动扳机拍照 → 右侧显示识别结果
+5. 方式 C：用启停脚本手动管理 OCR 服务（不运行程序时独立使用）
+   ```bat
+   ocr_service_toggle.bat         :: 双击打开交互菜单（1 启动 / 2 停止 / 3 状态 / 4 重启）
+   ocr_service_toggle.bat start   :: 命令行直接启动（独立窗口，端口 5100）
+   ocr_service_toggle.bat stop    :: 停止服务并释放显存
+   ocr_service_toggle.bat status  :: 查看端口监听与 GPU 显存/利用率
+   ocr_service_toggle.bat restart :: 重启服务
+   ```
+6. 下拉框选择 `[底座] CR8288` → 连接 → 点击「扫码并OCR识别」→ 扣动扳机拍照 → 右侧显示识别结果
 
 ## 已知说明
 - 识别速度：4GB 显存（NF4 量化）单张约 2~4 分钟，属模型特性；识别期间服务不响应其它请求
@@ -54,6 +62,7 @@ huggingface-cli download baidu/Unlimited-OCR --local-dir D:\AI\OCR-Scane\Unlimit
 ## 更新历史
 | 日期 | 版本 | 说明 |
 |---|---|---|
+| 2026-08-14 | 1.1.1 | 新增 `ocr_service_toggle.bat` 启停脚本：交互菜单 + 命令行参数（start/stop/status/restart），独立窗口启动、按进程名+端口停止并释放显存、实时查看 GPU 状态 |
 | 2026-08-14 | **1.1.1** | 修复 OCR 不稳定：新增块内重复停止检测（短语重复≥5次立即截断）、纯文本行内重复压缩与连续相同行去重、客户端断开静默处理；新增 GPU 利用率/显存实时状态栏；C# 编译 0 警告 |
 | 2026-08-14 | 1.1 | 仅支持 Unlimited-OCR：移除多模型切换、max_length=2048、内置重复循环检测、推理后释放显存、修复“一直无 OCR 结果” |
 | 2026-08-14 | 1.2 | （已废弃）曾改为仅支持 PaddleOCR-VL-0.9B；因 4GB 显存过慢，恢复 Unlimited-OCR |

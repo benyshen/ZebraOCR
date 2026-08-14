@@ -1,11 +1,13 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using System.Xml;
 using CoreScanner;
 
@@ -50,6 +52,8 @@ namespace ZebraOCR
         private bool m_capturing = false;
         private byte[]? m_lastImageBytes;
         private ZebraScanner? m_cradleScanner;
+        private bool m_modelListInitialized = false;
+        private DispatcherTimer? m_gpuTimer;
 
         public MainWindow()
         {
@@ -62,6 +66,7 @@ namespace ZebraOCR
         {
             tbStatus.Text = "正在初始化...";
             tbInfo.Text = "Zebra OCR 启动中";
+            PopulateModelCombo();
 
             // 初始化 CoreScanner
             try
@@ -97,7 +102,7 @@ namespace ZebraOCR
                 {
                     if (m_ocrService.IsInitialized)
                     {
-                        tbInfo.Text = "OCR 模型已就绪（Unlimited-OCR）";
+                        tbInfo.Text = "OCR 模型已就绪（" + (cmbModel.SelectedItem?.ToString() ?? "Unlimited-OCR") + "）";
                     }
                     else
                     {
@@ -108,6 +113,77 @@ namespace ZebraOCR
 
             // 发现设备
             DiscoverScanners();
+
+            // 启动 GPU 状态监控（每 2 秒刷新一次）
+            StartGpuMonitor();
+        }
+
+        // ============ GPU 状态监控 ============
+        private void StartGpuMonitor()
+        {
+            try
+            {
+                m_gpuTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                m_gpuTimer.Tick += async (_, _) => await RefreshGpuStatusAsync();
+                m_gpuTimer.Start();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[GPU] 监控启动失败: " + ex.Message);
+            }
+        }
+
+        private async Task RefreshGpuStatusAsync()
+        {
+            try
+            {
+                var info = await Task.Run(QueryGpuStatus);
+                if (string.IsNullOrEmpty(info))
+                {
+                    tbGpuInfo.Text = "GPU: N/A";
+                    tbGpuInfo.Foreground = new SolidColorBrush(Colors.Gray);
+                    return;
+                }
+                tbGpuInfo.Text = info;
+                tbGpuInfo.Foreground = new SolidColorBrush(Color.FromRgb(0x2E, 0x7D, 0x32));
+            }
+            catch (Exception)
+            {
+                tbGpuInfo.Text = "GPU: --";
+            }
+        }
+
+        /// <summary>通过 nvidia-smi 查询 GPU 利用率与显存占用</summary>
+        private static string? QueryGpuStatus()
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "nvidia-smi",
+                    Arguments = "--query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var proc = System.Diagnostics.Process.Start(psi);
+                if (proc == null) return null;
+                var output = proc.StandardOutput.ReadToEnd().Trim();
+                proc.WaitForExit(3000);
+                if (string.IsNullOrEmpty(output)) return null;
+                var parts = output.Split(',');
+                if (parts.Length < 3) return null;
+                var util = parts[0].Trim();
+                var used = parts[1].Trim();
+                var total = parts[2].Trim();
+                double usedG = double.Parse(used) / 1024.0;
+                double totalG = double.Parse(total) / 1024.0;
+                return string.Format("GPU: {0}% | 显存 {1:F1}/{2:F1} GB", util, usedG, totalG);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         // ============ 设备发现 ============
@@ -443,7 +519,7 @@ namespace ZebraOCR
             await m_ocrLock.WaitAsync();
             try
             {
-                tbInfo.Text = "OCR 识别中（Unlimited-OCR）...";
+                tbInfo.Text = "OCR 识别中（" + (cmbModel.SelectedItem as ModelOption)?.DisplayName + "）...";
 
                 // 保存临时文件
                 string tempFile = Path.Combine(Path.GetTempPath(), "zebra_ocr_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".jpg");
@@ -630,8 +706,37 @@ namespace ZebraOCR
             m_ocrCount = 0;
         }
 
+        private void PopulateModelCombo()
+        {
+            cmbModel.Items.Add(new ModelOption("Unlimited-OCR", @"D:\AI\OCR-Scane\Unlimited-OCR", "unlimited"));
+            cmbModel.SelectedIndex = 0;
+            m_modelListInitialized = true;
+            tbModelInfo.Text = "仅支持 Unlimited-OCR（端口 5100）";
+        }
+
+        private async void cmbModel_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (cmbModel.SelectedItem is not ModelOption opt) return;
+            m_ocrService.ModelPath = opt.Path;
+            if (!m_modelListInitialized) return; // 启动时首次填充，由初始化流程统一处理
+
+            tbStatus.Text = "正在切换 OCR 模型（首次加载约 30~120 秒）...";
+            await m_ocrService.EnsureServerForCurrentModelAsync();
+            tbStatus.Text = m_ocrService.IsInitialized
+                ? "OCR 模型切换完成：" + opt.DisplayName
+                : "OCR 模型切换失败，请查看程序日志";
+            tbInfo.Text = m_ocrService.IsInitialized
+                ? "OCR 模型已就绪（" + opt.DisplayName + "）"
+                : "OCR 模型未就绪（后台重试中...）";
+        }
+
         private void MainWindow_Closed(object? sender, EventArgs e)
         {
+            if (m_gpuTimer != null)
+            {
+                m_gpuTimer.Stop();
+                m_gpuTimer = null;
+            }
             try { DisconnectScanner(); } catch { }
             m_ocrService.Dispose();
         }
@@ -652,5 +757,24 @@ namespace ZebraOCR
         public bool IsCradle { get; set; }
 
         public override string ToString() => Description;
+    }
+
+    /// <summary>
+    /// OCR 模型选项（下拉框数据源）
+    /// </summary>
+    public class ModelOption
+    {
+        public string DisplayName { get; }
+        public string Path { get; }
+        public string Type { get; }
+
+        public ModelOption(string displayName, string path, string type)
+        {
+            DisplayName = displayName;
+            Path = path;
+            Type = type;
+        }
+
+        public override string ToString() => DisplayName;
     }
 }

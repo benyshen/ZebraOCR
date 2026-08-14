@@ -1,4 +1,4 @@
-﻿# ===== ZebraOCR 仓库忽略规则 =====
+# ===== ZebraOCR 仓库忽略规则 =====
 
 # OCR 模型权重（6.3GB，不上传，使用 HuggingFace 开源链接下载）
 # https://huggingface.co/baidu/Unlimited-OCR
@@ -37,3 +37,13 @@ ui_check.png
 .vs/
 *.user
 Thumbs.db
+# PaddleOCR-VL-0.9B 模型权重（1.9GB，不上传）
+PaddleOCR-VL-0.9B/
+
+# 快速启动脚本运行时产物
+_null_in.txt
+vl_pid.txt
+ocr_result_*.txt
+_ps1_test*.txt*
+# GPU 状态监控运行时产物
+gpu_monitor.csv

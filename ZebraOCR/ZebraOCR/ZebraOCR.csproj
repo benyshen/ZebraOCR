@@ -12,9 +12,9 @@
     <PlatformTarget>x64</PlatformTarget>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>1.0.1</Version>
-    <AssemblyVersion>1.0.1.0</AssemblyVersion>
-    <FileVersion>1.0.1.0</FileVersion>
+    <Version>1.1.1</Version>
+    <AssemblyVersion>1.1.1.0</AssemblyVersion>
+    <FileVersion>1.1.1.0</FileVersion>
     <Product>ZebraOCR 扫码枪图像识别系统</Product>
     <Description>Zebra DS8288 扫码枪图像捕获 + Unlimited-OCR AI 文字识别桌面软件</Description>
   </PropertyGroup>
@@ -33,6 +33,12 @@
 
   <ItemGroup>
     <None Update="ocr_server.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="ocr_server_unlimited.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="ocr_server_paddleocr_vl.py">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="Interop\CoreScanner.dll">

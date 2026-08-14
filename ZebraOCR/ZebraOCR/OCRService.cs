@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 namespace ZebraOCR
 {
     /// <summary>
-    /// OCR 服务：封装 baidu/Unlimited-OCR 本地推理
+    /// OCR 服务：封装本地推理（baidu/Unlimited-OCR）
     /// 通过 ocr_server.py 子进程 + 本地 HTTP 接口通信
     /// </summary>
     public class OCRService : IDisposable
@@ -20,22 +20,32 @@ namespace ZebraOCR
         private bool isInitialized = false;
         private string? pythonPath;
         private string ocrServerScriptPath = "";
-        private readonly int serverPort = 5100;
+        private readonly SemaphoreSlim initLock = new(1, 1);
 
-        // 本地已下载的模型路径
-        private const string DEFAULT_MODEL_PATH = @"D:\AI\OCR-Scane\Unlimited-OCR";
+        // 本地模型路径（仅 Unlimited-OCR）
+        private const string MODEL_PATH = @"D:\AI\OCR-Scane\Unlimited-OCR";
+
+        public string ModelPath { get; set; } = MODEL_PATH;
+
+        // Unlimited-OCR 固定使用 5100 端口
+        private int ServerPort => 5100;
 
         public OCRService()
         {
             var appPath = AppDomain.CurrentDomain.BaseDirectory;
-            ocrServerScriptPath = Path.Combine(appPath, "ocr_server.py");
-            httpClient.Timeout = TimeSpan.FromSeconds(600);
+            ocrServerScriptPath = Path.Combine(appPath, ServerScriptName);
+            // Unlimited-OCR 4GB 显存 NF4 量化，预留 30 分钟超时
+            httpClient.Timeout = TimeSpan.FromMinutes(30);
         }
+
+        /// <summary>当前模型对应的 OCR 服务脚本文件名</summary>
+        private string ServerScriptName => "ocr_server_unlimited.py";
 
         public bool IsInitialized => isInitialized;
 
         public async Task InitializeAsync()
         {
+            await initLock.WaitAsync();
             try
             {
                 pythonPath = FindPython();
@@ -51,6 +61,19 @@ namespace ZebraOCR
             {
                 Console.WriteLine("[OCRService] 初始化失败: " + ex.Message);
             }
+            finally
+            {
+                initLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// 模型切换后重新初始化（为当前模型启动对应端口服务）
+        /// </summary>
+        public async Task EnsureServerForCurrentModelAsync()
+        {
+            isInitialized = false;
+            await InitializeAsync();
         }
 
         private string? FindPython()
@@ -105,10 +128,13 @@ namespace ZebraOCR
 
         private async Task StartOCRServer()
         {
-            // 如果 ocr_server.py 不在程序目录，尝试从开发目录复制
+        // Unlimited-OCR 专用服务脚本
+            ocrServerScriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ServerScriptName);
+
+            // 如果服务脚本不在程序目录，尝试从开发目录复制
             if (!File.Exists(ocrServerScriptPath))
             {
-                var devPath = Path.Combine(@"D:\AI\OCR-Scane\ZebraOCR\ZebraOCR", "ocr_server.py");
+                var devPath = Path.Combine(@"D:\AI\OCR-Scane\ZebraOCR\ZebraOCR", ServerScriptName);
                 if (File.Exists(devPath))
                 {
                     File.Copy(devPath, ocrServerScriptPath, true);
@@ -117,53 +143,70 @@ namespace ZebraOCR
 
             if (!File.Exists(ocrServerScriptPath))
             {
-                Console.WriteLine("[OCRService] ocr_server.py 不存在，跳过启动");
+                Console.WriteLine("[OCRService] " + ServerScriptName + " 不存在，跳过启动");
                 return;
             }
 
-            // 如果端口已被占用，复用已运行的实例
+            // 检查端口是否已有服务在运行
+            bool serverRunning = false;
             try
             {
-                var checkResp = await httpClient.GetAsync("http://127.0.0.1:" + serverPort + "/health");
+                var checkResp = await httpClient.GetAsync("http://127.0.0.1:" + ServerPort + "/health");
                 if (checkResp.IsSuccessStatusCode)
                 {
-                    Console.WriteLine("[OCRService] 检测到已运行的 OCR 服务器，直接复用");
-                    return;
+                    var checkBody = await checkResp.Content.ReadAsStringAsync();
+                    using var checkDoc = JsonDocument.Parse(checkBody);
+                    var checkRoot = checkDoc.RootElement;
+                    bool loaded = checkRoot.TryGetProperty("model_loaded", out var loadedEl) && loadedEl.GetBoolean();
+                    if (loaded)
+                    {
+                        Console.WriteLine("[OCRService] 检测到已就绪的 OCR 服务器，直接复用 (port " + ServerPort + ")");
+                        return;
+                    }
+                    serverRunning = true; // 服务进程在跑但模型还在加载，直接等待就绪
+                    Console.WriteLine("[OCRService] 检测到 OCR 服务器正在加载模型，等待就绪 (port " + ServerPort + ")");
                 }
             }
             catch { }
 
-            // 杀掉旧的子进程
-            if (pythonProcess != null && !pythonProcess.HasExited)
+            if (!serverRunning)
             {
-                try { pythonProcess.Kill(); } catch { }
+                // 杀掉旧的子进程
+                if (pythonProcess != null && !pythonProcess.HasExited)
+                {
+                    try { pythonProcess.Kill(); } catch { }
+                }
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = pythonPath!,
+                    Arguments = "\"" + ocrServerScriptPath + "\" --port " + ServerPort +
+                                " --model \"" + ModelPath + "\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                pythonProcess = Process.Start(startInfo);
             }
 
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = pythonPath!,
-                Arguments = "\"" + ocrServerScriptPath + "\" --port " + serverPort,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            pythonProcess = Process.Start(startInfo);
-
-            // 等待健康检查通过（首次加载模型需 30-60 秒）
-            var deadline = DateTime.Now.AddSeconds(180);
+            // 等待模型加载完成（首次加载需 30-120 秒）
+            var deadline = DateTime.Now.AddSeconds(240);
             while (DateTime.Now < deadline)
             {
                 try
                 {
-                    var resp = await httpClient.GetAsync("http://127.0.0.1:" + serverPort + "/health");
+                    var resp = await httpClient.GetAsync("http://127.0.0.1:" + ServerPort + "/health");
                     if (resp.IsSuccessStatusCode)
                     {
                         var body = await resp.Content.ReadAsStringAsync();
-                        if (body.Contains("ok"))
+                        using var doc = JsonDocument.Parse(body);
+                        var root = doc.RootElement;
+                        bool loaded = root.TryGetProperty("model_loaded", out var loadedEl) && loadedEl.GetBoolean();
+                        if (loaded)
                         {
-                            Console.WriteLine("[OCRService] OCR 服务器就绪");
+                            Console.WriteLine("[OCRService] OCR 服务器就绪 (port " + ServerPort + ")");
                             return;
                         }
                     }
@@ -172,7 +215,7 @@ namespace ZebraOCR
                 await Task.Delay(2000);
             }
 
-            Console.WriteLine("[OCRService] OCR 服务器健康检查超时");
+            Console.WriteLine("[OCRService] OCR 服务器健康检查超时 (port " + ServerPort + ")");
         }
 
         /// <summary>
@@ -191,13 +234,13 @@ namespace ZebraOCR
                 image_path = imagePath,
                 prompt,
                 image_mode = "gundam",
-                max_length = 8192
+                max_length = 2048
             };
 
             var json = JsonSerializer.Serialize(payload);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await httpClient.PostAsync("http://127.0.0.1:" + serverPort + "/recognize", content);
+            var response = await httpClient.PostAsync("http://127.0.0.1:" + ServerPort + "/recognize", content);
             var responseBody = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
